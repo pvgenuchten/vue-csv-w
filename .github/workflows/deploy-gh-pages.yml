@@ -1,0 +1,54 @@
+name: Build & deploy frontend to GitHub Pages
+
+# Run on pushes to main (adjust branch if you use 'master' or another branch),
+# and allow manual dispatch.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Need pages write permission to deploy
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: github-pages
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # fetch full history to show accurate commit info (optional)
+          fetch-depth: 0
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: |
+          npm ci
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: |
+          npm run build
+
+      # Upload the build output as the artifact that the Pages deploy action expects
+      - name: Upload build artifact for GitHub Pages
+        uses: actions/upload-pages-artifact@v1
+        with:
+          # update path if your build folder is different
+          path: ./frontend/dist
+
+      # Deploy to GitHub Pages (this will create/update the special gh-pages deployment)
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v1
