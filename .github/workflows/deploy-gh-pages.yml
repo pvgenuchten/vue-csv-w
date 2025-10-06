@@ -1,54 +1,32 @@
-name: Build & deploy frontend to GitHub Pages
+name: Build and Upload Vue App
 
-# Run on pushes to main (adjust branch if you use 'master' or another branch),
-# and allow manual dispatch.
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
-
-# Need pages write permission to deploy
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment: github-pages
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          # fetch full history to show accurate commit info (optional)
-          fetch-depth: 0
+          node-version: 20
 
-      - name: Use Node.js 20.x
-        uses: actions/setup-node@v4
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Vue app
+        run: npm run build
+
+      - name: Upload dist folder as artifact
+        uses: actions/upload-artifact@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: |
-          npm ci
-
-      - name: Build frontend
-        working-directory: ./frontend
-        run: |
-          npm run build
-
-      # Upload the build output as the artifact that the Pages deploy action expects
-      - name: Upload build artifact for GitHub Pages
-        uses: actions/upload-pages-artifact@v1
-        with:
-          # update path if your build folder is different
-          path: ./frontend/dist
-
-      # Deploy to GitHub Pages (this will create/update the special gh-pages deployment)
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+          name: vue-dist
+          path: dist
