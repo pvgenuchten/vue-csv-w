@@ -1,85 +1,52 @@
 <template>
   <div class="container py-4">
-    <h2 class="mb-4">CSV-W Editor (Server-based)</h2>
+    <h2 class="mb-3">CSVW editor</h2>
+    <p>Select one or more CSV files, which are published on the web. Mind that the remote webserver should support 
+    <a href="https://en.wikipedia.org/wiki/Cross-origin_resource_sharing">CORS</a>. Then run the `extract headers`
+    command to extract metadata from the CSV's. Then update the metadata to your needs and run `process CSV` to generate
+    RDF (as json-ld, other serialisations are supported by the API)</p>
 
-    <!-- Input for online CSV URL -->
-    <div class="mb-3">
-      <label for="csvUrl" class="form-label">CSV URL</label>
-      <div class="input-group">
-        <input
-          id="csvUrl"
-          type="url"
-          class="form-control"
-          v-model="csvUrl"
-          placeholder="https://example.com/data.csv"
-        />
-        <button class="btn btn-primary" @click="loadCsv">Load CSV</button>
-      </div>
-      <div v-if="error" class="text-danger small mt-1">{{ error }}</div>
-    </div>
-
-    <!-- Preview -->
-    <div v-if="csvRows.length" class="table-responsive mb-4">
-      <h5>CSV Preview (first 10 rows)</h5>
-      <table class="table table-striped table-bordered table-sm">
-        <thead>
-          <tr>
-            <th v-for="(header, i) in csvHeaders" :key="i">{{ header }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(row, rIdx) in csvRows.slice(0, 10)" :key="rIdx">
-            <td v-for="header in csvHeaders" :key="header">{{ row[header] }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <CSVUploader @csvs-changed="onCsvsChanged" />
 
     <CSVWClientParser
-      v-if="csvHeaders.length"
-      :csvHeaders="csvHeaders"
-      :csvRows="csvRows"
-      :csvUrl="csvUrl"
+      v-if="combinedHeaders.length"
+      :csvFiles="csvFiles"
     />
   </div>
 </template>
 
 <script>
-import Papa from 'papaparse'
+import CSVUploader from './components/CSVUploader.vue'
 import CSVWClientParser from './components/CSVWClientParser.vue'
 
 export default {
   name: 'App',
-  components: { CSVWClientParser },
+  components: { CSVUploader, CSVWClientParser },
   data() {
     return {
-      csvUrl: '',
-      csvRows: [],
-      csvHeaders: [],
-      error: null
+      csvFiles: [] // array of { url, rows, headers, text }
+    }
+  },
+  computed: {
+    combinedHeaders() {
+      const seen = new Set()
+      this.csvFiles.forEach(f => (f.headers || []).forEach(h => seen.add(h)))
+      return Array.from(seen)
+    },
+    // combined rows: concatenate rows from all files, normalizing keys
+    combinedRows() {
+      const rows = []
+      for (const f of this.csvFiles) {
+        for (const r of (f.rows || [])) {
+          rows.push(r)
+        }
+      }
+      return rows
     }
   },
   methods: {
-    async loadCsv() {
-      this.error = null
-      this.csvRows = []
-      this.csvHeaders = []
-
-      if (!this.csvUrl) {
-        this.error = 'Please enter a CSV URL.'
-        return
-      }
-
-      try {
-        const response = await fetch(this.csvUrl)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const text = await response.text()
-        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true })
-        this.csvHeaders = parsed.meta.fields || []
-        this.csvRows = parsed.data || []
-      } catch (e) {
-        this.error = 'Failed to load CSV: ' + e.message
-      }
+    onCsvsChanged(files) {
+      this.csvFiles = files
     }
   }
 }

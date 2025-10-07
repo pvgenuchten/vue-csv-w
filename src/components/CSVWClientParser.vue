@@ -1,31 +1,87 @@
 <template>
   <div>
-    <h3 class="mb-3">CSV-W</h3>
-
     <div class="d-flex gap-2 mb-3 align-items-center">
-      <input type="hidden" v-model="serverUrl" />
-     
-      <button class="btn btn-outline-secondary btn-sm" @click="extractHeaders" :disabled="!csvHeaders || !csvHeaders.length">Extract headers</button>
-      <button class="btn btn-primary btn-sm" @click="postMetadata" :disabled="running">Process CSV</button> 
-      <button class="btn btn-outline-secondary btn-sm" @click="validateMetadata" :disabled="validating">Validate JSON-LD</button>
-      <div v-if="running" class="ms-2 text-muted">⏳ Sending...</div>
+      <input type="hidden" v-model="serverUrl" class="form-control form-control-sm me-2" style="max-width:480px" />
       <div v-if="error" class="ms-2 text-danger">{{ error }}</div>
     </div>
 
     <div class="row g-3">
       <div class="col-md-6">
-        <h4>CSV-W metadata (JSON-LD)</h4>
-        <Codemirror v-model="metadataText" :extensions="cmExtensions" class="border rounded" style="height:420px;" />
+        <h4>CSV Files <button class="btn btn-outline-secondary btn-sm float-end" @click="extractHeaders" :disabled="!csvFiles || !csvFiles.length">Extract metadata</button></h4>
+
+        <div v-if="!csvFiles.length" class="text-muted">No CSVs added.</div>
+
+        <ul class="nav nav-tabs mb-3" role="tablist" v-if="csvFiles.length">
+          <li class="nav-item" v-for="(f, idx) in csvFiles" :key="f.url">
+            <button class="nav-link" :class="{ active: activeIndex === idx }" @click="activeIndex = idx" type="button">
+              {{ filenameLabel(f.url, idx) }}
+            </button>
+          </li>
+        </ul>
+
+        <div v-if="csvFiles.length" class="tab-content">
+          <div class="tab-pane active">
+            <div v-if="currentFile">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <div>
+                  <strong>{{ currentFile.url }}</strong>
+                  <div class="small text-muted">{{ currentFile.headers.length }} columns — {{ currentFile.rows.length }} rows</div>
+                </div>
+                <div class="text-end">
+                  <label class="form-label small mb-0">Link to another table (optional)</label>
+                  <div class="d-flex gap-1">
+                    <select class="form-select form-select-sm" v-model="relationships[currentFile.url].target" :disabled="otherTables.length===0">
+                      <option value="">(none)</option>
+                      <option v-for="t in otherTables" :key="t.url" :value="t.url">{{ filenameLabel(t.url) }}</option>
+                    </select>
+
+                    <select class="form-select form-select-sm" v-model="relationships[currentFile.url].sourceField">
+                      <option value="">(select field)</option>
+                      <option v-for="h in currentFile.headers" :key="h" :value="h">{{ h }}</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="currentFile.headers.length">
+                <table class="table table-striped table-bordered table-sm">
+                  <thead class="table-dark"><tr><th v-for="h in currentFile.headers" :key="h">{{ h }}</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(row,i) in currentFile.rows.slice(0,10)" :key="i">
+                      <td v-for="h in currentFile.headers" :key="h">{{ row[h] }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <small class="text-muted">Showing first 10 rows</small>
+              </div>
+              <div v-else class="text-muted">No headers detected in this file.</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="col-md-6">
-        <h4>Server response</h4>
+        <h4>
+          CSV-W metadata 
+          <button class="btn btn-primary btn-sm float-end" @click="postMetadata" :disabled="running">Process CSV</button>
+          <div v-if="running" class="ms-2 text-muted float-end">⏳ Sending...</div>
+        </h4>
+        <Codemirror v-model="metadataText" :extensions="cmExtensions" class="border rounded" style="height:420px;" />
+      </div>
+    </div>
+
+    <div class="row mt-3">
+      <div class="col-12">
+        <h4>Server response 
+        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadJSONLD">Download JSON-LD</button>
+        </h4>
         <div class="mb-3">
-          <strong>JSON-LD</strong>
           <pre class="bg-light p-2 border rounded small" style="max-height:220px; overflow:auto">{{ prettyJsonld }}</pre>
         </div>
       </div>
     </div>
+
+    <div v-if="tripleCount !== null" class="mt-2 text-muted">Triples returned: {{ tripleCount }}</div>
   </div>
 </template>
 
@@ -38,11 +94,10 @@ import { oneDark } from '@codemirror/theme-one-dark'
 export default defineComponent({
   name: 'CSVWClientParser',
   components: { Codemirror },
- props: {
-  csvHeaders: Array,
-  csvRows: Array,
-  csvUrl: String
-},
+  props: {
+    csvFiles: { type: Array, default: () => [] },
+    initialContext: { type: Object, default: () => ({ '@context': {} }) }
+  },
   data() {
     return {
       serverUrl: 'http://localhost:8000/feeds/csvw/',
@@ -53,150 +108,51 @@ export default defineComponent({
       running: false,
       validating: false,
       tripleCount: null,
-      cmExtensions: [json(), oneDark]
+      cmExtensions: [json(), oneDark],
+      activeIndex: 0,
+      relationships: {} // map url -> { target: '', sourceField: '' }
     }
   },
   computed: {
     prettyJsonld() {
       try { return JSON.stringify(this.jsonldOut, null, 2) } catch (e) { return '' }
+    },
+    currentFile() {
+      return this.csvFiles && this.csvFiles[this.activeIndex] ? this.csvFiles[this.activeIndex] : null
+    },
+    otherTables() {
+      if (!this.currentFile) return []
+      return this.csvFiles.filter(f => f.url !== this.currentFile.url)
+    }
+  },
+  watch: {
+    csvFiles: {
+      handler(files) {
+        // initialize relationships entries for each file if not present
+        for (const f of files) {
+          if (!this.relationships[f.url]) this.relationships[f.url] = { target: '', sourceField: '' }
+        }
+        // remove relationships for files no longer present
+        Object.keys(this.relationships).forEach(k => {
+          if (!files.find(f => f.url === k)) delete this.relationships[k]
+        })
+      },
+      immediate: true
     }
   },
   methods: {
-    // Build a basic metadata object from headers and insert into editor
-    extractHeaders() {
+    filenameLabel(url, idx) {
       try {
-        if (!this.csvHeaders || !this.csvHeaders.length) {
-          this.error = 'No headers available to extract.';
-          this.metadataText = ''; // keep editor in sync
-          return;
-        }
-
-        // samples for type-guessing and uniqueness
-        const sampleForTypes = (this.csvRows || []).slice(0, 5);
-        const sampleForUniqueness = (this.csvRows || []).slice(0, 200);
-
-        // type-guessing helper
-        const guessType = (values) => {
-          let numCount = 0, dateCount = 0, nonEmpty = 0;
-          for (const v of values) {
-            const s = (v === null || v === undefined) ? '' : String(v).trim();
-            if (s === '') continue;
-            nonEmpty++;
-            const asNum = Number(s);
-            if (!Number.isNaN(asNum) && isFinite(asNum)) { numCount++; continue; }
-            const ts = Date.parse(s);
-            if (!Number.isNaN(ts)) { dateCount++; continue; }
-          }
-          if (nonEmpty === 0) return 'string';
-          if (numCount / nonEmpty >= 0.8) return 'number';
-          if (dateCount / nonEmpty >= 0.8) return 'date';
-          return 'string';
-        };
-
-        // schema.org CURIE lookup (short, human-friendly)
-        const schemaLookup = {
-          name: 'schema:name',
-          title: 'schema:name',
-          description: 'schema:description',
-          id: 'schema:identifier',
-          identifier: 'schema:identifier',
-          uuid: 'schema:identifier',
-          email: 'schema:email',
-          url: 'schema:url',
-          link: 'schema:url',
-          date: 'schema:date',
-          created: 'schema:dateCreated',
-          updated: 'schema:dateModified',
-          value: 'schema:value'
-        };
-
-        // build columns with titles, name, dcterms:description, propertyUrl, optional datatype
-        const columns = this.csvHeaders.map((h) => {
-          const samples = sampleForTypes.map(r => (r && Object.prototype.hasOwnProperty.call(r, h)) ? r[h] : '');
-          const guessed = guessType(samples);
-          let datatype;
-          if (guessed === 'number') datatype = 'http://www.w3.org/2001/XMLSchema#decimal';
-          if (guessed === 'date') datatype = 'http://www.w3.org/2001/XMLSchema#dateTime';
-
-          const keyLower = String(h).toLowerCase();
-          const propertyUrl = schemaLookup[keyLower] || 'schema:value';
-
-          const col = {
-            titles: h,
-            name: h,
-            'dcterms:description': h,
-            propertyUrl
-          };
-          if (datatype) col.datatype = datatype;
-          return col;
-        });
-
-        // primary key heuristics: check uniqueness over sampleForUniqueness
-        const headerScores = this.csvHeaders.map((h) => {
-          let nonEmpty = 0;
-          const seen = new Set();
-          for (const r of sampleForUniqueness) {
-            const v = (r && Object.prototype.hasOwnProperty.call(r, h)) ? r[h] : '';
-            const s = (v === null || v === undefined) ? '' : String(v).trim();
-            if (s === '') continue;
-            nonEmpty++;
-            seen.add(s);
-          }
-          const distinct = seen.size;
-          const uniqRatio = nonEmpty > 0 ? (distinct / nonEmpty) : 0;
-          return { header: h, nonEmpty, distinct, uniqRatio };
-        });
-
-        const strongCandidates = headerScores.filter(s => s.nonEmpty >= 3 && s.uniqRatio >= 0.98);
-        const goodCandidates = headerScores.filter(s => s.nonEmpty >= 3 && s.uniqRatio >= 0.8);
-
-        const pickByNamePreference = (cands) => {
-          const nameHints = ['id', 'uuid', 'code', 'key', 'identifier'];
-          for (const hint of nameHints) {
-            const match = cands.find(c => c.header.toLowerCase().includes(hint));
-            if (match) return match.header;
-          }
-          return null;
-        };
-
-        let primaryKey = null;
-        if (strongCandidates.length === 1) primaryKey = strongCandidates[0].header;
-        else if (strongCandidates.length > 1) primaryKey = pickByNamePreference(strongCandidates) || strongCandidates.sort((a,b)=>b.uniqRatio-a.uniqRatio)[0].header;
-        else if (goodCandidates.length >= 1) primaryKey = pickByNamePreference(goodCandidates) || goodCandidates.sort((a,b)=>b.uniqRatio-a.uniqRatio)[0].header;
-        else {
-          const perfect = headerScores.filter(s => s.nonEmpty >= 3 && s.distinct === s.nonEmpty);
-          if (perfect.length) primaryKey = pickByNamePreference(perfect) || perfect[0].header;
-        }
-
-        // build a basic context mapping (editable by user)
-        const context = { '@vocab': 'http://example.org/vocab#' };
-        this.csvHeaders.forEach(h => {
-          const token = String(h).replace(/[^a-zA-Z0-9_]/g, '_');
-          context[h] = `http://example.org/vocab#${token}`;
-        });
-
-        // compose metadata; use official CSVW JSON-LD context and include primaryKey if found
-        const metadata = {
-          "@context": "https://www.w3.org/ns/csvw.jsonld",
-          "url": this.csvUrl || "data.csv",
-          "tableSchema": {
-            "columns": columns
-          }
-        };
-        if (primaryKey) metadata.tableSchema.primaryKey = primaryKey;
-
-        // write into the editor-bound property
-        this.metadataText = JSON.stringify(metadata, null, 2);
-        this.error = null;
+        const parts = url.split('/')
+        let name = parts[parts.length-1] || url
+        if (!name) name = `file${idx+1}`
+        return name
       } catch (e) {
-        this.error = 'Extract headers failed: ' + (e && e.message ? e.message : String(e));
-        // leave metadataText unchanged on error so user can inspect editor
+        return `file${idx+1}`
       }
     },
 
-
-
-    // Simple JSON-LD validation using jsonld.toRDF on the server side we trust, here we do a quick client check
+    // Validate JSON shape quickly
     async validateMetadata() {
       this.validating = true
       this.error = null
@@ -209,7 +165,147 @@ export default defineComponent({
       }
     },
 
-    // POST metadata to server endpoint
+    // Build tables[] metadata: one tableSchema per CSV file (uses relationships for foreign keys)
+    extractHeaders() {
+      try {
+        const files = this.csvFiles || []
+        if (!files.length) {
+          this.error = 'No CSV files added.'
+          return
+        }
+
+        // helpers
+        const guessType = (values) => {
+          let numCount = 0, dateCount = 0, nonEmpty = 0
+          for (const v of values) {
+            const s = (v === null || v === undefined) ? '' : String(v).trim()
+            if (s === '') continue
+            nonEmpty++
+            const asNum = Number(s)
+            if (!Number.isNaN(asNum) && isFinite(asNum)) { numCount++; continue }
+            const ts = Date.parse(s)
+            if (!Number.isNaN(ts)) { dateCount++; continue }
+          }
+          if (nonEmpty === 0) return 'string'
+          if (numCount / nonEmpty >= 0.8) return 'number'
+          if (dateCount / nonEmpty >= 0.8) return 'date'
+          return 'string'
+        }
+
+        // short CURIE schema lookup
+        const schemaLookup = {
+          name: 'schema:name', title: 'schema:name', description: 'schema:description',
+          id: 'schema:identifier', identifier: 'schema:identifier', uuid: 'schema:identifier',
+          email: 'schema:email', url: 'schema:url', link: 'schema:url',
+          date: 'schema:date', created: 'schema:dateCreated', updated: 'schema:dateModified',
+          value: 'schema:value'
+        }
+
+        const tables = []
+
+        for (const f of files) {
+          const headers = f.headers || []
+          const rowsForTypes = (f.rows || []).slice(0, 5)
+          const rowsForUniqueness = (f.rows || []).slice(0, 200)
+
+          // build columns for this file
+          const columns = headers.map(h => {
+            const samples = rowsForTypes.map(r => (r && Object.prototype.hasOwnProperty.call(r, h)) ? r[h] : '')
+            const guessed = guessType(samples)
+            let datatype
+            if (guessed === 'number') datatype = 'http://www.w3.org/2001/XMLSchema#decimal'
+            if (guessed === 'date') datatype = 'http://www.w3.org/2001/XMLSchema#dateTime'
+            const keyLower = String(h).toLowerCase()
+            const propertyUrl = schemaLookup[keyLower] || 'schema:value'
+            const col = {
+              titles: h,
+              name: h,
+              'dcterms:description': h,
+              propertyUrl
+            }
+            if (datatype) col.datatype = datatype
+            return col
+          })
+
+          // primary key heuristics per-file
+          const headerScores = headers.map(h => {
+            let nonEmpty = 0
+            const seen = new Set()
+            for (const r of rowsForUniqueness) {
+              const v = (r && Object.prototype.hasOwnProperty.call(r, h)) ? r[h] : ''
+              const s = (v === null || v === undefined) ? '' : String(v).trim()
+              if (s === '') continue
+              nonEmpty++
+              seen.add(s)
+            }
+            const distinct = seen.size
+            const uniqRatio = nonEmpty > 0 ? (distinct / nonEmpty) : 0
+            return { header: h, nonEmpty, distinct, uniqRatio }
+          })
+
+          const strongCandidates = headerScores.filter(s => s.nonEmpty >= 3 && s.uniqRatio >= 0.98)
+          const goodCandidates = headerScores.filter(s => s.nonEmpty >= 3 && s.uniqRatio >= 0.8)
+          const pickByNamePreference = (cands) => {
+            const nameHints = ['id','uuid','code','key','identifier']
+            for (const hint of nameHints) {
+              const match = cands.find(c => c.header.toLowerCase().includes(hint))
+              if (match) return match.header
+            }
+            return null
+          }
+
+          let primaryKey = null
+          if (strongCandidates.length === 1) primaryKey = strongCandidates[0].header
+          else if (strongCandidates.length > 1) primaryKey = pickByNamePreference(strongCandidates) || strongCandidates.sort((a,b)=>b.uniqRatio-a.uniqRatio)[0].header
+          else if (goodCandidates.length >= 1) primaryKey = pickByNamePreference(goodCandidates) || goodCandidates.sort((a,b)=>b.uniqRatio-a.uniqRatio)[0].header
+          else {
+            const perfect = headerScores.filter(s => s.nonEmpty >= 3 && s.distinct === s.nonEmpty)
+            if (perfect.length) primaryKey = pickByNamePreference(perfect) || perfect[0].header
+          }
+
+          const table = {
+            url: f.url || 'data.csv',
+            tableSchema: {
+              columns
+            }
+          }
+          if (primaryKey) table.tableSchema.primaryKey = primaryKey
+
+          // attach foreignKey if user specified a relationship for this file
+          const rel = this.relationships[f.url]
+          if (rel && rel.target && rel.sourceField) {
+            table.tableSchema.foreignKeys = [
+              {
+                columns: [rel.sourceField],
+                reference: {
+                  resource: rel.target,
+                  columnReference: undefined // server can interpret primaryKey of target
+                }
+              }
+            ]
+          }
+
+          tables.push(table)
+        }
+
+        // Build overall context mapping from union of headers (for readability)
+        const allHeaders = []
+        files.forEach(f => (f.headers || []).forEach(h => { if (!allHeaders.includes(h)) allHeaders.push(h) }))
+        const context = { '@vocab': 'http://example.org/vocab#' }
+        allHeaders.forEach(h => { context[h] = `http://example.org/vocab#${String(h).replace(/[^a-zA-Z0-9_]/g,'_')}` })
+
+        const metadata = {
+          '@context': [ 'https://www.w3.org/ns/csvw.jsonld', context ],
+          tables
+        }
+
+        this.metadataText = JSON.stringify(metadata, null, 2)
+        this.error = null
+      } catch (e) {
+        this.error = 'Extract headers failed: ' + (e && e.message ? e.message : String(e))
+      }
+    },
+
     async postMetadata() {
       this.running = true
       this.error = null
@@ -237,13 +333,41 @@ export default defineComponent({
           throw new Error(`Server returned ${res.status}: ${txt}`)
         }
         const data = await res.json()
-        // Expecting { jsonld: <object>, ttl: <string> }
-        this.jsonldOut = data || null
+        const jsonld = typeof data === 'string' ? JSON.parse(data) : data
+        this.jsonldOut = jsonld || null
         
       } catch (e) {
         this.error = e.message || String(e)
       } finally {
         this.running = false
+      }
+    },
+    // download helpers
+    downloadJSONLD() {
+    try {
+    if (!this.metadataText) return
+    const blob = new Blob([JSON.stringify(this.jsonldOut, null, 2)], { type: 'application/ld+json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const fname = this.downloadFilename('csvw', 'jsonld')
+    a.href = url
+    a.download = fname
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    } catch (e) {
+    this.error = 'Download failed: ' + (e && e.message ? e.message : String(e))
+    }
+    },
+    downloadFilename(base, ext) {
+      // prefer first CSV filename as base if available
+      try {
+      const first = (this.csvFiles && this.csvFiles[0] && this.csvFiles[0].url) ? this.csvFiles[0].url.split('/').pop() : null
+      const name = first ? first.replace(/\.[^/.]+$/, '') : base
+      return `${name}.${ext}`
+      } catch (e) {
+      return `${base}.${ext}`
       }
     }
   }
