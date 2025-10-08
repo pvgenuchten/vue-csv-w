@@ -7,6 +7,7 @@
     RDF (as json-ld, other serialisations are supported by the API)</p>
 
     <CSVUploader @csvs-changed="onCsvsChanged" />
+    <ExcelUploader @csvs-changed="onCsvsChanged" />
 
     <CSVWClientParser
       v-if="combinedHeaders.length"
@@ -45,9 +46,14 @@ export default {
     }
   },
   methods: {
-    onCsvsChanged(files) {
-      this.csvFiles = files
-    }
-  }
+    onCsvsChanged(payload) {
+        // payload may be a single entry or an array
+        if (Array.isArray(payload)) {
+        for (const e of payload) this.csvFiles.push(e)
+        } else if (payload && payload.url) {
+        this.csvFiles.push(payload)
+        }
+    } 
+  },
 }
 </script>
