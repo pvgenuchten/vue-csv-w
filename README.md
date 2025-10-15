@@ -4,6 +4,11 @@ A web application to set up csv-w context for your csv's. The tool runs clientsi
 
 You can upload several CSV's and link them together via primary and foreign keys.
 
+Run locally:
+```
+npm run dev
+```
+
 In order to process a CSV, it should be available via a webserver supporting CORS. Run a webserver from a folder containing csv's for testing purposes: 
 
 ```

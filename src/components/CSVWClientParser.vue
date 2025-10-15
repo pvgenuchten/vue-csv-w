@@ -7,9 +7,13 @@
 
     <div class="row g-3">
       <div class="col-md-6">
-        <h4>CSV Files <button class="btn btn-outline-secondary btn-sm float-end" @click="extractHeaders" :disabled="!csvFiles || !csvFiles.length">Extract metadata</button></h4>
+      <div class="border rounded m-3">
+        <h4>
+          Tables 
+          <button class="btn btn-outline-secondary btn-sm float-end" @click="extractHeaders" :disabled="!csvFiles || !csvFiles.length">Extract metadata</button>
+        </h4>
 
-        <div v-if="!csvFiles.length" class="text-muted">No CSVs added.</div>
+        <div v-if="!csvFiles.length" class="text-muted">No tables added.</div>
 
         <ul class="nav nav-tabs mb-3" role="tablist" v-if="csvFiles.length">
           <li class="nav-item" v-for="(f, idx) in csvFiles" :key="f.url">
@@ -58,22 +62,26 @@
             </div>
           </div>
         </div>
+        </div>
       </div>
 
       <div class="col-md-6">
-        <h4>
-          CSV-W metadata 
-          <button class="btn btn-primary btn-sm float-end" @click="postMetadata" :disabled="running">Process CSV</button>
-          <div v-if="running" class="ms-2 text-muted float-end">⏳ Sending...</div>
-        </h4>
-        <Codemirror v-model="metadataText" :extensions="cmExtensions" class="border rounded" style="height:420px;" />
+        <div class="border rounded m-3">
+          <h4>
+            Table metadata 
+            <button class="btn btn-primary btn-sm float-end" @click="postMetadata" :disabled="running">Process CSV</button>
+            <div v-if="running" class="ms-2 text-muted float-end">⏳ Sending...</div>
+          </h4>
+          <Codemirror v-model="metadataText" :extensions="cmExtensions" class="border rounded" style="height:420px;" />
+        </div>
       </div>
     </div>
 
     <div class="row mt-3">
       <div class="col-12">
         <h4>Server response 
-        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadJSONLD">Download JSON-LD</button>
+        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadJSONLD">Download context</button>
+        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadPackage">Download package</button>
         </h4>
         <div class="mb-3">
           <pre class="bg-light p-2 border rounded small" style="max-height:220px; overflow:auto">{{ prettyJsonld }}</pre>
@@ -90,6 +98,8 @@ import { defineComponent } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { json } from '@codemirror/lang-json'
 import { oneDark } from '@codemirror/theme-one-dark'
+import JSZip from 'jszip'
+import { saveAs } from 'file-saver'
 
 export default defineComponent({
   name: 'CSVWClientParser',
@@ -213,8 +223,8 @@ export default defineComponent({
             const samples = rowsForTypes.map(r => (r && Object.prototype.hasOwnProperty.call(r, h)) ? r[h] : '')
             const guessed = guessType(samples)
             let datatype
-            if (guessed === 'number') datatype = 'http://www.w3.org/2001/XMLSchema#decimal'
-            if (guessed === 'date') datatype = 'http://www.w3.org/2001/XMLSchema#dateTime'
+            if (guessed === 'number') datatype = 'decimal'
+            if (guessed === 'date') datatype = 'dateTime'
             const keyLower = String(h).toLowerCase()
             const propertyUrl = schemaLookup[keyLower] || 'schema:value'
             const col = {
@@ -290,12 +300,12 @@ export default defineComponent({
 
         // Build overall context mapping from union of headers (for readability)
         const allHeaders = []
-        files.forEach(f => (f.headers || []).forEach(h => { if (!allHeaders.includes(h)) allHeaders.push(h) }))
-        const context = { '@vocab': 'http://example.org/vocab#' }
-        allHeaders.forEach(h => { context[h] = `http://example.org/vocab#${String(h).replace(/[^a-zA-Z0-9_]/g,'_')}` })
+        //files.forEach(f => (f.headers || []).forEach(h => { if (!allHeaders.includes(h)) allHeaders.push(h) }))
+        //const context = { '@vocab': this.+'#' }
+        //allHeaders.forEach(h => { context[h] = `http://example.org/vocab#${String(h).replace(/[^a-zA-Z0-9_]/g,'_')}` })
 
         const metadata = {
-          '@context': [ 'https://www.w3.org/ns/csvw.jsonld', context ],
+          '@context': [ 'https://www.w3.org/ns/csvw.jsonld' ],
           tables
         }
 
@@ -344,21 +354,21 @@ export default defineComponent({
     },
     // download helpers
     downloadJSONLD() {
-    try {
-    if (!this.metadataText) return
-    const blob = new Blob([JSON.stringify(this.jsonldOut, null, 2)], { type: 'application/ld+json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    const fname = this.downloadFilename('csvw', 'jsonld')
-    a.href = url
-    a.download = fname
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-    } catch (e) {
-    this.error = 'Download failed: ' + (e && e.message ? e.message : String(e))
-    }
+      try {
+      if (!this.metadataText) return
+      const blob = new Blob([JSON.stringify(this.jsonldOut, null, 2)], { type: 'application/ld+json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const fname = this.downloadFilename('csvw', 'jsonld')
+      a.href = url
+      a.download = fname
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      } catch (e) {
+      this.error = 'Download failed: ' + (e && e.message ? e.message : String(e))
+      }
     },
     downloadFilename(base, ext) {
       // prefer first CSV filename as base if available
@@ -369,7 +379,123 @@ export default defineComponent({
       } catch (e) {
       return `${base}.${ext}`
       }
+    },
+    async downloadPackage() {
+      try {
+      // require JSZip & FileSaver installed and imported
+      const zip = new JSZip()
+
+      // 1) add metadata.jsonld (take from editor; try to pretty-print JSON if possible)
+      let metaContent = this.metadataText || ''
+      // if metadataText is JSON string, ensure it's pretty-printed
+      try {
+        const parsed = JSON.parse(metaContent)
+        metaContent = JSON.stringify(parsed, null, 2)
+      } catch (e) {
+        // leave as-is (user may have manual edits)
+      }
+      zip.file('metadata.jsonld', metaContent)
+
+      // 2) add one CSV per csvFiles entry (prop from parent)
+      // csvFiles expected: [{ url, headers, rows, text }, ...]
+      const files = this.csvFiles || []
+      const usedNames = new Set()
+      for (const f of files) {
+        // determine filename: prefer f.url last segment, else fallback
+        let fname = 'table.csv'
+        try {
+          if (f.url) {
+            const parts = String(f.url).split('/')
+            let candidate = parts[parts.length - 1] || f.url
+            if (!candidate) candidate = `table`
+            // if sheet style 'file#Sheet1' keep it
+            fname = candidate
+          } else if (f.filename) {
+            fname = f.filename
+          }
+        } catch (e) {
+          fname = 'table.csv'
+        }
+        // sanitize name and ensure .csv extension
+        fname = fname.replace(/[:?<>|\\\/]+/g, '_')
+        if (!/\.csv$/i.test(fname)) fname = fname + '.csv'
+
+        // ensure unique names inside zip
+        let unique = fname
+        let i = 1
+        while (usedNames.has(unique)) {
+          unique = fname.replace(/(\.csv)$/i, `_${i}$1`)
+          i++
+        }
+        usedNames.add(unique)
+
+        // if f.text present, use it; otherwise serialize headers+rows
+        if (f.text && typeof f.text === 'string' && f.text.trim().length > 0) {
+          zip.file(unique, f.text)
+        } else {
+          // build CSV from headers & rows
+          const headers = f.headers || (f.table && f.table.tableSchema && f.table.tableSchema.columns
+            ? f.table.tableSchema.columns.map(c => (typeof c === 'string' ? c : (c.name || (Array.isArray(c.titles) ? c.titles[0] : c.titles || ''))))
+            : [])
+          const rows = f.rows || []
+          const escapeCell = (v) => {
+            if (v === null || v === undefined) return ''
+            const s = String(v)
+            if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+              return '"' + s.replace(/"/g, '""') + '"'
+            }
+            return s
+          }
+          const lines = []
+          if (headers && headers.length) {
+            lines.push(headers.map(escapeCell).join(','))
+            for (const r of rows) {
+              const rowLine = headers.map(h => escapeCell(r && Object.prototype.hasOwnProperty.call(r, h) ? r[h] : '')).join(',')
+              lines.push(rowLine)
+            }
+          } else {
+            // simple fallback: if rows are arrays or objects with keys, attempt to infer
+            if (rows && rows.length) {
+              // if row is array
+              if (Array.isArray(rows[0])) {
+                for (const r of rows) lines.push(r.map(escapeCell).join(','))
+              } else {
+                // union keys
+                const keySet = new Set()
+                rows.forEach(r => Object.keys(r || {}).forEach(k => keySet.add(k)))
+                const hdrs = Array.from(keySet)
+                lines.push(hdrs.map(escapeCell).join(','))
+                for (const r of rows) lines.push(hdrs.map(h => escapeCell(r && r[h] != null ? r[h] : '')).join(','))
+              }
+            } else {
+              // empty file
+              lines.push('') 
+            }
+          }
+          zip.file(unique, lines.join('\n'))
+        }
+      }
+
+      // generate zip blob and save
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const filename = this.packageFilename()
+      saveAs(blob, filename)
+    } catch (e) {
+      this.error = 'Package download failed: ' + (e && e.message ? e.message : String(e))
     }
+  },
+  // helper to build zip filename
+  packageFilename() {
+    try {
+      // prefer first csv file name base if available
+      const first = (this.csvFiles && this.csvFiles[0] && this.csvFiles[0].url) ? this.csvFiles[0].url.split('/').pop() : null
+      const base = first ? first.replace(/\.[^/.]+$/, '') : 'csvw_package'
+      return `${base}.zip`
+    } catch (e) {
+      return 'csvw_package.zip'
+    }
+  }
+
   }
 })
 </script>

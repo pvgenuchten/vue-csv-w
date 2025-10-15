@@ -1,5 +1,6 @@
 <template>
   <div class="container py-4">
+  <div class="border rounded m-3">
     <h2 class="mb-3">CSVW editor</h2>
     <p>Select one or more CSV files, which are published on the web. Mind that the remote webserver should support 
     <a href="https://en.wikipedia.org/wiki/Cross-origin_resource_sharing">CORS</a>. Then run the `extract headers`
@@ -7,8 +8,7 @@
     RDF (as json-ld, other serialisations are supported by the API)</p>
 
     <CSVUploader @csvs-changed="onCsvsChanged" />
-    <ExcelUploader @csvs-changed="onCsvsChanged" />
-
+</div>
     <CSVWClientParser
       v-if="combinedHeaders.length"
       :csvFiles="csvFiles"
