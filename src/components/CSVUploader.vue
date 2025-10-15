@@ -33,7 +33,6 @@
           </div>
           <div>
             <button class="btn btn-sm btn-outline-secondary me-1" @click="remove(idx)">Remove</button>
-            <button class="btn btn-sm btn-outline-secondary" @click="preview(idx)">Preview</button>
           </div>
         </li>
       </ul>

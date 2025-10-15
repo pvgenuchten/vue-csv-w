@@ -7,14 +7,14 @@
 
     <div class="row g-3">
       <div class="col-md-6">
-      <div class="border rounded m-3">
+      <div class="border rounded p-3">
         <h4>
           Tables 
           <button class="btn btn-outline-secondary btn-sm float-end" @click="extractHeaders" :disabled="!csvFiles || !csvFiles.length">Extract metadata</button>
+          
         </h4>
 
         <div v-if="!csvFiles.length" class="text-muted">No tables added.</div>
-
         <ul class="nav nav-tabs mb-3" role="tablist" v-if="csvFiles.length">
           <li class="nav-item" v-for="(f, idx) in csvFiles" :key="f.url">
             <button class="nav-link" :class="{ active: activeIndex === idx }" @click="activeIndex = idx" type="button">
@@ -27,10 +27,6 @@
           <div class="tab-pane active">
             <div v-if="currentFile">
               <div class="d-flex justify-content-between align-items-center mb-2">
-                <div>
-                  <strong>{{ currentFile.url }}</strong>
-                  <div class="small text-muted">{{ currentFile.headers.length }} columns — {{ currentFile.rows.length }} rows</div>
-                </div>
                 <div class="text-end">
                   <label class="form-label small mb-0">Link to another table (optional)</label>
                   <div class="d-flex gap-1">
@@ -66,10 +62,11 @@
       </div>
 
       <div class="col-md-6">
-        <div class="border rounded m-3">
+        <div class="border rounded p-3">
           <h4>
             Table metadata 
             <button class="btn btn-primary btn-sm float-end" @click="postMetadata" :disabled="running">Process CSV</button>
+            <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadPackage">Download package</button>
             <div v-if="running" class="ms-2 text-muted float-end">⏳ Sending...</div>
           </h4>
           <Codemirror v-model="metadataText" :extensions="cmExtensions" class="border rounded" style="height:420px;" />
@@ -79,9 +76,8 @@
 
     <div class="row mt-3">
       <div class="col-12">
-        <h4>Server response 
-        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadJSONLD">Download context</button>
-        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadPackage">Download package</button>
+        <h4>Graph
+        <button class="btn btn-sm btn-outline-secondary float-end" @click="downloadJSONLD">Download graph</button>
         </h4>
         <div class="mb-3">
           <pre class="bg-light p-2 border rounded small" style="max-height:220px; overflow:auto">{{ prettyJsonld }}</pre>
@@ -110,7 +106,8 @@ export default defineComponent({
   },
   data() {
     return {
-      serverUrl: 'http://localhost:8000/feeds/csvw/',
+      localTables: [],
+      serverUrl: 'http://localhost:8000/convert/',
       metadataText: JSON.stringify(this.initialContext, null, 2),
       jsonldOut: null,
       ttl: '',
@@ -123,9 +120,13 @@ export default defineComponent({
       relationships: {} // map url -> { target: '', sourceField: '' }
     }
   },
+  created() {
+    // init once
+    this.localTables = (this.csvFiles || []).slice()
+  },
   computed: {
     prettyJsonld() {
-      try { return JSON.stringify(this.jsonldOut, null, 2) } catch (e) { return '' }
+      try { return JSON.stringify(this.jsonldOut, null, 2) || '' } catch (e) { return '' }
     },
     currentFile() {
       return this.csvFiles && this.csvFiles[this.activeIndex] ? this.csvFiles[this.activeIndex] : null
@@ -137,14 +138,15 @@ export default defineComponent({
   },
   watch: {
     csvFiles: {
-      handler(files) {
+      handler(newFiles) {
+        this.localTables = (newFiles || []).slice()
         // initialize relationships entries for each file if not present
-        for (const f of files) {
+        for (const f of newFiles) {
           if (!this.relationships[f.url]) this.relationships[f.url] = { target: '', sourceField: '' }
         }
         // remove relationships for files no longer present
         Object.keys(this.relationships).forEach(k => {
-          if (!files.find(f => f.url === k)) delete this.relationships[k]
+          if (!newFiles.find(f => f.url === k)) delete this.relationships[k]
         })
       },
       immediate: true
@@ -279,7 +281,10 @@ export default defineComponent({
               columns
             }
           }
-          if (primaryKey) table.tableSchema.primaryKey = primaryKey
+          if (primaryKey){ 
+            table.tableSchema.primaryKey = primaryKey;
+            table.tableSchema.aboutUrl = (f.url || 'data.csv') + '/{'+ primaryKey +'}';
+          }
 
           // attach foreignKey if user specified a relationship for this file
           const rel = this.relationships[f.url]
@@ -417,7 +422,7 @@ export default defineComponent({
           fname = 'table.csv'
         }
         // sanitize name and ensure .csv extension
-        fname = fname.replace(/[:?<>|\\\/]+/g, '_')
+        fname = fname.replace(/[:#?<>|\\\/]+/g, '_')
         if (!/\.csv$/i.test(fname)) fname = fname + '.csv'
 
         // ensure unique names inside zip
