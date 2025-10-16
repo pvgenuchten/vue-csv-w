@@ -28,11 +28,41 @@
       <ul class="list-group mb-2">
         <li class="list-group-item d-flex justify-content-between align-items-start" v-for="(f, idx) in csvFiles" :key="f.url">
           <div class="ms-2 me-auto">
-            <div class="fw-bold text-truncate" style="max-width: 420px;"><a :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a></div>
+            <div class="fw-bold text-truncate" style="max-width: 420px;">
+              <a :href="f.url" target="_blank" rel="noopener">{{ f.url }}</a>
+            </div>
             <div class="small text-muted">{{ f.headers.length }} columns — {{ f.rows.length }} rows</div>
           </div>
+
+          <!-- Entity type selector -->
+          <div class="me-3" style="min-width:220px">
+
+            <select class="form-select form-select-sm" v-model="f.entityType" @change="emitChange">
+              <option value="">Select a type for row</option>
+              <option value="dcat:Catalog">dcat:Catalog</option>
+              <option value="dcat:CatalogRecord">dcat:CatalogRecord</option>
+              <option value="dcat:Resource">dcat:Resource</option>
+              <option value="dcat:Dataset">dcat:Dataset</option>
+              <option value="dcat:Service">dcat:Service</option>
+              <option value="glosis:Site">glosis:Site</option>
+              <option value="glosis:Plot">glosis:Plot</option>
+              <option value="glosis:Profile">glosis:Profile</option>
+              <option value="glosis:Element">glosis:Element</option>
+              <option value="schema:Thing">schema:Thing</option>
+              <option value="schema:CreativeWork">schema:CreativeWork</option>
+              <option value="schema:Dataset">schema:Dataset</option>
+              <option value="schema:Location">schema:Location</option>
+              <option value="skos:Concept">skos:Concept</option>
+              <option value="skos:ConceptScheme">skos:ConceptScheme</option>
+              <option value="sosa:FeatureOfInterest">sosa:FeatureOfInterest</option>
+              <option value="sosa:Observation">sosa:Observation</option>
+              <option value="sosa:Sample">sosa:Sample</option>
+            </select>
+          </div>
+
           <div>
             <button class="btn btn-sm btn-outline-secondary me-1" @click="remove(idx)">Remove</button>
+            <button class="btn btn-sm btn-outline-secondary" @click="preview(idx)">Preview</button>
           </div>
         </li>
       </ul>
@@ -71,7 +101,7 @@ export default {
     return {
       useExcel: false,
       csvUrlInput: '',
-      csvFiles: [], // array of { url, rows, headers, text }
+      csvFiles: [], // array of { url, rows, headers, text, entityType }
       loading: false,
       error: null,
       previewIndex: null
@@ -89,11 +119,10 @@ export default {
         const text = await res.text()
         const parsed = Papa.parse(text, { header: true, skipEmptyLines: true })
         if (parsed.errors && parsed.errors.length) {
-          // report first parse error but still prevent adding
           throw new Error(`CSV parse error: ${parsed.errors[0].message}`)
         }
-        const file = { url, rows: parsed.data, headers: parsed.meta.fields || [], text }
-        // avoid duplicates (by url)
+        // add default entityType = ''
+        const file = { url, rows: parsed.data, headers: parsed.meta.fields || [], text, entityType: '' }
         if (!this.csvFiles.find(f => f.url === url)) {
           this.csvFiles.push(file)
           this.emitChange()
@@ -108,7 +137,6 @@ export default {
       }
     },
 
-    // Excel handling
     async onExcelFile(ev) {
       this.error = null
       const f = ev.target.files && ev.target.files[0]
@@ -118,17 +146,12 @@ export default {
         const arrayBuffer = await fileToArrayBuffer(f)
         const workbook = XLSX.read(arrayBuffer, { type: 'array' })
         const baseName = f.name.replace(/\.[^/.]+$/, '')
-        const newEntries = []
-
         for (const sheetName of workbook.SheetNames) {
           const sheet = workbook.Sheets[sheetName]
-          // get rows as array-of-arrays
           const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null })
-          // detect header row with simple heuristic
           const headerIndex = detectHeaderRow(raw)
           const headerRow = (raw[headerIndex] || []).map(c => (c == null ? '' : String(c).trim()))
           const rows = []
-          // gather rows after header until multiple empty rows
           let emptyStreak = 0
           for (let i = headerIndex + 1; i < raw.length; i++) {
             const r = raw[i]
@@ -145,8 +168,6 @@ export default {
             }
             rows.push(obj)
           }
-
-          // simple CSV text serialization
           const escapeCell = (v) => {
             if (v == null) return ''
             const s = String(v)
@@ -163,17 +184,13 @@ export default {
           }
           const csvText = csvLines.join('\n')
           const entryUrl = `${baseName}#${sheetName}`
-          const entry = { url: entryUrl, rows, headers: headerRow, text: csvText }
-          // avoid duplicates by url
+          // default entityType = ''
+          const entry = { url: entryUrl, rows, headers: headerRow, text: csvText, entityType: '' }
           if (!this.csvFiles.find(f => f.url === entryUrl)) {
             this.csvFiles.push(entry)
-            newEntries.push(entry)
           }
         }
-
-        // emit full files array
         this.emitChange()
-        // clear file input so same file can be reuploaded if needed
         if (this.$refs.fileInput) this.$refs.fileInput.value = ''
       } catch (err) {
         this.error = 'Failed to parse Excel file: ' + (err && err.message ? err.message : String(err))
@@ -181,7 +198,6 @@ export default {
         this.loading = false
       }
 
-      // helpers
       function fileToArrayBuffer(file) {
         return new Promise((resolve, reject) => {
           const reader = new FileReader()
@@ -192,17 +208,14 @@ export default {
       }
 
       function detectHeaderRow(rows) {
-        // very similar heuristic as discussed: scan top N rows
         const maxScan = Math.min(rows.length, 20)
         const minFollowing = 2
         let bestIdx = 0
         let bestScore = -Infinity
-
         const isEmptyRow = (r) => {
           if (!r) return true
           return r.every(c => c === null || c === undefined || String(c).trim() === '')
         }
-
         for (let i = 0; i < maxScan; i++) {
           const row = rows[i] || []
           if (isEmptyRow(row)) continue
@@ -210,7 +223,6 @@ export default {
           if (nonEmpty === 0) continue
           const uniqueCount = new Set(row.map(c => (c==null? '' : String(c).trim()))).size
           const uniqueness = uniqueCount / Math.max(1, nonEmpty)
-
           let followingGood = 0, followingChecked = 0
           for (let j = i + 1; j < Math.min(rows.length, i + 1 + 10); j++) {
             const r2 = rows[j] || []
@@ -227,7 +239,6 @@ export default {
             bestIdx = i
           }
         }
-
         if (bestScore === -Infinity) {
           for (let i = 0; i < Math.min(rows.length, 5); i++) {
             if (!isEmptyRow(rows[i])) return i
@@ -256,7 +267,7 @@ export default {
     },
 
     emitChange() {
-      // emit copy of array to avoid mutation surprises
+      // ensure we emit a fresh array reference
       this.$emit('csvs-changed', this.csvFiles.slice())
     }
   }

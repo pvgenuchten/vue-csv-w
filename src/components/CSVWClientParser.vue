@@ -206,11 +206,12 @@ export default defineComponent({
 
         // short CURIE schema lookup
         const schemaLookup = {
-          name: 'schema:name', title: 'schema:name', description: 'schema:description',
-          id: 'schema:identifier', identifier: 'schema:identifier', uuid: 'schema:identifier',
-          email: 'schema:email', url: 'schema:url', link: 'schema:url',
-          date: 'schema:date', created: 'schema:dateCreated', updated: 'schema:dateModified',
-          value: 'schema:value'
+          dcat: 'schema:title', 
+          skos: 'schema:prefLabel', 
+          dc: 'schema:title',
+          sosa: 'schema:label', 
+          glosis: 'schema:label', 
+          schema: 'schema:name'
         }
 
         const tables = []
@@ -228,7 +229,11 @@ export default defineComponent({
             if (guessed === 'number') datatype = 'decimal'
             if (guessed === 'date') datatype = 'dateTime'
             const keyLower = String(h).toLowerCase()
-            const propertyUrl = schemaLookup[keyLower] || 'schema:value'
+            var propertyUrl = 'schema:value'
+            if f.entityType {
+              propertyUrl = schemaLookup[f.entityType.split(':')[0] || ''
+            }
+
             const col = {
               titles: h,
               name: h,
@@ -286,6 +291,26 @@ export default defineComponent({
             table.tableSchema.aboutUrl = (f.url || 'data.csv') + '/{'+ primaryKey +'}';
           }
 
+           // Apply entity type selection from uploader: add a virtual column that sets rdf:type
+        // f.entityType expected as e.g. "schema:Observation" or "skos:Concept"
+        const et = (f.entityType && typeof f.entityType === 'string') ? f.entityType.trim() : ''
+        if (et) {
+          // choose aboutUrl template:
+          // - if we have a primaryKey column, use it in the template {PRIMARYKEY}
+          // - otherwise fall back to a generic {id} placeholder (user can edit later)
+          const pkPlaceholder = primaryKey ? `{${primaryKey}}` : `{id}`
+          const aboutTemplate = (f.url || 'data.csv') + '/{'+ primaryKey +'}' // change base if you prefer
+
+          const virtualCol = {
+            virtual: true,
+            propertyUrl: "rdf:type",
+            aboutUrl: aboutTemplate,
+            valueUrl: et
+          }
+          // insert virtual column as the first column for readability
+          table.tableSchema.columns.push(virtualCol)
+        }
+
           // attach foreignKey if user specified a relationship for this file
           const rel = this.relationships[f.url]
           if (rel && rel.target && rel.sourceField) {
@@ -303,14 +328,16 @@ export default defineComponent({
           tables.push(table)
         }
 
-        // Build overall context mapping from union of headers (for readability)
+        // Add namespaces
         const allHeaders = []
-        //files.forEach(f => (f.headers || []).forEach(h => { if (!allHeaders.includes(h)) allHeaders.push(h) }))
-        //const context = { '@vocab': this.+'#' }
-        //allHeaders.forEach(h => { context[h] = `http://example.org/vocab#${String(h).replace(/[^a-zA-Z0-9_]/g,'_')}` })
+        const context = {}
+        context['skos'] = 'http://www.w3.org/2004/02/skos/core#'
+        context['sosa'] = 'http://www.w3.org/ns/sosa/'
+        context['dcat'] = 'http://www.w3.org/ns/dcat#'
+        context['glosis'] = 'http://w3id.org/glosis/model/common/'
 
         const metadata = {
-          '@context': [ 'https://www.w3.org/ns/csvw.jsonld' ],
+          '@context': [ 'https://www.w3.org/ns/csvw.jsonld', context ],
           tables
         }
 
